@@ -342,11 +342,11 @@ app.get("/api/payments/deposit/:txnId/status", auth, async (req, res) => {
 
   if (!txn.lipanaTxnId) return res.json({ status: txn.status });
 
-  try {
-    const lipanaRes = await axios.get(`https://api.lipana.dev/transactions/${txn.lipanaTxnId}`,
-      { headers: { "Authorization": `Bearer ${LIPANA_KEY}` } }
-    );
-    const remote = lipanaRes.data;
+try {
+    const lipanaRes = await fetch(`https://api.lipana.dev/transactions/${txn.lipanaTxnId}`, {
+      headers: { "Authorization": `Bearer ${LIPANA_KEY}` }
+    });
+    const remote = await lipanaRes.json();
     const s = (remote.status || "").toLowerCase();
     if ((s === "success" || s === "completed") && txn.status !== "success") {
       txn.status = "success"; txn.completedAt = new Date().toISOString();
