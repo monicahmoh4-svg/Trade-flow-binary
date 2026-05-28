@@ -1,24 +1,16 @@
 {
   "version": 2,
-  "buildCommand": "cd server && npm install && cd ../client && npm install && npm run build",
-  "outputDirectory": "client/build",
-  "installCommand": "echo 'skipping root install'",
-  "framework": null,
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)", "destination": "/index.html" }
-  ],
   "builds": [
-    {
-      "src": "server/index.js",
-      "use": "@vercel/node"
-    },
     {
       "src": "client/package.json",
       "use": "@vercel/static-build",
       "config": {
         "distDir": "build"
       }
+    },
+    {
+      "src": "server/index.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
