@@ -26,18 +26,17 @@ const DARAJA_BASE = MPESA_ENV === "production"
   ? "https://api.safaricom.co.ke"
   : "https://sandbox.safaricom.co.ke";
 
-const IS_DEMO = !CONSUMER_KEY || !CONSUMER_SECRET || !PASSKEY ||
-  CONSUMER_KEY.length < 10;
+const IS_DEMO = !CONSUMER_KEY || !CONSUMER_SECRET || !PASSKEY || CONSUMER_KEY.length < 10;
 
 console.log("=================================================");
-console.log(`[STARTUP] MPESA_ENV      : ${MPESA_ENV}`);
-console.log(`[STARTUP] DARAJA_BASE    : ${DARAJA_BASE}`);
-console.log(`[STARTUP] SHORTCODE      : ${SHORTCODE}`);
-console.log(`[STARTUP] CONSUMER_KEY   : ${CONSUMER_KEY ? CONSUMER_KEY.slice(0,8)+"..." : "NOT SET"}`);
-console.log(`[STARTUP] CONSUMER_SECRET: ${CONSUMER_SECRET ? "SET ("+CONSUMER_SECRET.length+" chars)" : "NOT SET"}`);
-console.log(`[STARTUP] PASSKEY        : ${PASSKEY ? "SET ("+PASSKEY.length+" chars)" : "NOT SET"}`);
-console.log(`[STARTUP] CALLBACK_URL   : ${CALLBACK_URL}`);
-console.log(`[STARTUP] IS_DEMO        : ${IS_DEMO}`);
+console.log(`[CFG] MPESA_ENV       = ${MPESA_ENV}`);
+console.log(`[CFG] DARAJA_BASE     = ${DARAJA_BASE}`);
+console.log(`[CFG] SHORTCODE       = ${SHORTCODE}`);
+console.log(`[CFG] CONSUMER_KEY    = ${CONSUMER_KEY ? CONSUMER_KEY.slice(0,8)+"..." : "NOT SET"}`);
+console.log(`[CFG] CONSUMER_SECRET = ${CONSUMER_SECRET ? "SET("+CONSUMER_SECRET.length+"chars)" : "NOT SET"}`);
+console.log(`[CFG] PASSKEY         = ${PASSKEY ? "SET("+PASSKEY.length+"chars)" : "NOT SET"}`);
+console.log(`[CFG] CALLBACK_URL    = ${CALLBACK_URL}`);
+console.log(`[CFG] IS_DEMO         = ${IS_DEMO}`);
 console.log("=================================================");
 
 // ── Middleware ────────────────────────────────────────────────
@@ -46,12 +45,12 @@ app.use(morgan("dev"));
 app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 app.use(rateLimit({
-  windowMs: 60 * 1000,
-  max: 500,
+  windowMs: 60 * 1000, max: 500,
   skip: req =>
     req.path.startsWith("/api/market") ||
     req.path.startsWith("/api/payments/deposit/") ||
-    req.path.startsWith("/api/payments/mpesa"),
+    req.path.startsWith("/api/payments/mpesa") ||
+    req.path.startsWith("/api/payments/test"),
 }));
 
 // ── In-Memory DB ──────────────────────────────────────────────
@@ -82,7 +81,7 @@ DB.users.push({
   password: bcrypt.hashSync("Demo@1234", 10),
   role: "user", balance: 5000, totalDeposited: 5000, totalWithdrawn: 0,
   totalProfit: 1430, totalLoss: 800, tradeCount: 12, winCount: 8,
-  status: "active", createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+  status: "active", createdAt: new Date(Date.now()-86400000*5).toISOString(),
   lastLogin: new Date().toISOString(), phone: "+254712345678", kycVerified: true,
 });
 
@@ -99,77 +98,58 @@ function adminOnly(req, res, next) {
   if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin only" });
   next();
 }
-
 function formatPhone(raw) {
-  let p = String(raw).trim().replace(/[\s\-()]/g, "");
-  if (p.startsWith("+")) p = p.slice(1);
-  if (p.startsWith("0")) p = "254" + p.slice(1);
-  if (p.startsWith("7") || p.startsWith("1")) p = "254" + p;
+  let p = String(raw).trim().replace(/[\s\-()+]/g, "");
+  if (p.startsWith("254")) return p;
+  if (p.startsWith("0"))   return "254" + p.slice(1);
+  if (p.startsWith("7") || p.startsWith("1")) return "254" + p;
   return p;
 }
-
 function getTimestamp() {
-  const now = new Date();
+  const d = new Date();
   const pad = n => String(n).padStart(2, "0");
-  return (
-    now.getFullYear().toString() +
-    pad(now.getMonth() + 1) +
-    pad(now.getDate()) +
-    pad(now.getHours()) +
-    pad(now.getMinutes()) +
-    pad(now.getSeconds())
-  );
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
-
 function getPassword(ts) {
-  return Buffer.from(SHORTCODE + PASSKEY + ts).toString("base64");
+  return Buffer.from(`${SHORTCODE}${PASSKEY}${ts}`).toString("base64");
 }
 
-// ── Daraja API calls via axios ────────────────────────────────
-
+// ── Daraja OAuth ──────────────────────────────────────────────
 async function getAccessToken() {
+  // Build Basic auth manually — most reliable across all envs
+  const credential = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString("base64");
   const url = `${DARAJA_BASE}/oauth/v1/generate?grant_type=client_credentials`;
-  console.log(`[OAUTH] Requesting token from: ${url}`);
 
-  try {
-    const response = await axios.get(url, {
-      auth: {
-        username: CONSUMER_KEY,
-        password: CONSUMER_SECRET,
-      },
-      timeout: 15000,
-      headers: {
-        "Accept": "application/json",
-      },
-    });
+  console.log(`[OAUTH] → GET ${url}`);
+  console.log(`[OAUTH] credential prefix: ${credential.slice(0,12)}...`);
 
-    console.log(`[OAUTH] Response status: ${response.status}`);
-    console.log(`[OAUTH] Response data: ${JSON.stringify(response.data)}`);
+  const response = await axios({
+    method: "get",
+    url,
+    headers: {
+      "Authorization": `Basic ${credential}`,
+      "Accept":        "application/json",
+      "Cache-Control": "no-cache",
+    },
+    timeout: 20000,
+    // do NOT use axios `auth:` option — build header manually above
+  });
 
-    if (!response.data?.access_token) {
-      throw new Error(`No access_token in response: ${JSON.stringify(response.data)}`);
-    }
+  console.log(`[OAUTH] ← ${response.status} ${JSON.stringify(response.data)}`);
 
-    console.log(`[OAUTH] Token obtained successfully`);
-    return response.data.access_token;
-
-  } catch (err) {
-    const status  = err.response?.status;
-    const data    = err.response?.data;
-    const errMsg  = err.response
-      ? `HTTP ${status}: ${JSON.stringify(data)}`
-      : err.message;
-    console.error(`[OAUTH] FAILED: ${errMsg}`);
-    throw new Error(`OAuth failed: ${errMsg}`);
+  if (!response.data?.access_token) {
+    throw new Error(`No access_token. Response: ${JSON.stringify(response.data)}`);
   }
+  return response.data.access_token;
 }
 
-async function initiateStkPush(token, phone, amount) {
-  const ts      = getTimestamp();
-  const pw      = getPassword(ts);
-  const url     = `${DARAJA_BASE}/mpesa/stkpush/v1/processrequest`;
+// ── STK Push ──────────────────────────────────────────────────
+async function stkPush(token, phone, amount) {
+  const ts  = getTimestamp();
+  const pw  = getPassword(ts);
+  const url = `${DARAJA_BASE}/mpesa/stkpush/v1/processrequest`;
 
-  const payload = {
+  const body = {
     BusinessShortCode: SHORTCODE,
     Password:          pw,
     Timestamp:         ts,
@@ -183,50 +163,43 @@ async function initiateStkPush(token, phone, amount) {
     TransactionDesc:   `Deposit KES ${Math.ceil(amount)}`,
   };
 
-  console.log(`[STK] Sending to: ${url}`);
-  console.log(`[STK] Payload: ${JSON.stringify({ ...payload, Password: "[HIDDEN]" })}`);
+  console.log(`[STK] → POST ${url}`);
+  console.log(`[STK] body: ${JSON.stringify({ ...body, Password: "[HIDDEN]" })}`);
 
-  try {
-    const response = await axios.post(url, payload, {
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type":  "application/json",
-        "Accept":        "application/json",
-      },
-      timeout: 30000,
-    });
+  const response = await axios({
+    method:  "post",
+    url,
+    data:    body,
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type":  "application/json",
+      "Accept":        "application/json",
+    },
+    timeout: 30000,
+  });
 
-    console.log(`[STK] Response status: ${response.status}`);
-    console.log(`[STK] Response data: ${JSON.stringify(response.data)}`);
-    return response.data;
-
-  } catch (err) {
-    const status = err.response?.status;
-    const data   = err.response?.data;
-    const errMsg = err.response
-      ? `HTTP ${status}: ${JSON.stringify(data)}`
-      : err.message;
-    console.error(`[STK] FAILED: ${errMsg}`);
-    throw new Error(`STK push failed: ${errMsg}`);
-  }
+  console.log(`[STK] ← ${response.status} ${JSON.stringify(response.data)}`);
+  return response.data;
 }
 
-async function queryStkStatus(token, checkoutRequestId) {
+// ── STK Query ─────────────────────────────────────────────────
+async function stkQuery(token, checkoutRequestId) {
   const ts  = getTimestamp();
   const pw  = getPassword(ts);
   const url = `${DARAJA_BASE}/mpesa/stkpushquery/v1/query`;
 
-  const payload = {
+  const body = {
     BusinessShortCode: SHORTCODE,
     Password:          pw,
     Timestamp:         ts,
     CheckoutRequestID: checkoutRequestId,
   };
 
-  console.log(`[QUERY] Checking status for: ${checkoutRequestId}`);
+  console.log(`[QUERY] → POST ${url} checkoutId=${checkoutRequestId}`);
 
   try {
-    const response = await axios.post(url, payload, {
+    const response = await axios({
+      method: "post", url, data: body,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
@@ -234,20 +207,58 @@ async function queryStkStatus(token, checkoutRequestId) {
       },
       timeout: 15000,
     });
-
-    console.log(`[QUERY] Response: ${JSON.stringify(response.data)}`);
+    console.log(`[QUERY] ← ${response.status} ${JSON.stringify(response.data)}`);
     return response.data;
-
   } catch (err) {
-    // Daraja returns 400 for "still processing" — handle gracefully
-    const data = err.response?.data;
-    console.log(`[QUERY] Error response: ${JSON.stringify(data)}`);
-    if (data) return data; // return the body so we can check errorCode
-    throw new Error(err.message);
+    // 400 from Daraja often means "still processing" — return body
+    if (err.response?.data) {
+      console.log(`[QUERY] ← ${err.response.status} ${JSON.stringify(err.response.data)}`);
+      return err.response.data;
+    }
+    throw err;
   }
 }
 
-// ── AUTH ROUTES ───────────────────────────────────────────────
+// ── DIAGNOSTIC endpoint — visit /api/payments/test-daraja ────
+// This lets you test Daraja connectivity without using the app UI
+app.get("/api/payments/test-daraja", async (req, res) => {
+  const result = {
+    config: {
+      MPESA_ENV,
+      DARAJA_BASE,
+      SHORTCODE,
+      CONSUMER_KEY_SET: !!CONSUMER_KEY,
+      CONSUMER_KEY_LEN: CONSUMER_KEY.length,
+      CONSUMER_SECRET_SET: !!CONSUMER_SECRET,
+      CONSUMER_SECRET_LEN: CONSUMER_SECRET.length,
+      PASSKEY_SET: !!PASSKEY,
+      PASSKEY_LEN: PASSKEY.length,
+      CALLBACK_URL,
+      IS_DEMO,
+    },
+    oauth: null,
+    oauthError: null,
+    stk: null,
+    stkError: null,
+  };
+
+  if (IS_DEMO) {
+    return res.json({ ...result, message: "Running in DEMO mode — set env vars to test real Daraja" });
+  }
+
+  // Test OAuth
+  try {
+    const token = await getAccessToken();
+    result.oauth = { success: true, tokenPrefix: token.slice(0, 10) + "..." };
+  } catch (e) {
+    result.oauthError = e.message;
+    return res.json({ ...result, message: "OAuth failed — check CONSUMER_KEY and CONSUMER_SECRET" });
+  }
+
+  res.json({ ...result, message: "OAuth OK! Use POST /api/payments/deposit to test STK push." });
+});
+
+// ── AUTH ──────────────────────────────────────────────────────
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { username, email, password, phone } = req.body;
@@ -296,7 +307,7 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
   res.json(safeUser(user));
 });
 
-// ── USER ROUTES ───────────────────────────────────────────────
+// ── USER ──────────────────────────────────────────────────────
 app.get("/api/user/stats", authMiddleware, (req, res) => {
   const user = DB.users.find(u => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "Not found" });
@@ -311,18 +322,16 @@ app.get("/api/user/stats", authMiddleware, (req, res) => {
     todayTrades: td.length,
   });
 });
-
 app.get("/api/user/trades", authMiddleware, (req, res) => {
   res.json(DB.trades.filter(t => t.userId === req.user.id)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50));
 });
-
 app.get("/api/user/transactions", authMiddleware, (req, res) => {
   res.json(DB.transactions.filter(t => t.userId === req.user.id)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 30));
 });
 
-// ── TRADE ROUTES ──────────────────────────────────────────────
+// ── TRADE ─────────────────────────────────────────────────────
 app.post("/api/trade/place", authMiddleware, (req, res) => {
   if (!DB.settings.tradingEnabled)
     return res.status(403).json({ error: "Trading disabled by admin" });
@@ -347,12 +356,11 @@ app.post("/api/trade/place", authMiddleware, (req, res) => {
     createdAt: new Date().toISOString(), settledAt: null,
   };
   DB.trades.push(trade);
-
   const rate = (DB.settings.payoutRates[expiryLabel] || DB.settings.defaultPayout) / 100;
   setTimeout(() => {
     const t = DB.trades.find(x => x.id === trade.id);
     if (!t) return;
-    const win = Math.random() < 0.55;
+    const win   = Math.random() < 0.55;
     t.result    = win ? "WIN" : "LOSS";
     t.payout    = win ? Math.round(stake * rate) : -stake;
     t.exitPrice = entryPrice * (win ? (direction === "CALL" ? 1.002 : 0.998) : (direction === "CALL" ? 0.998 : 1.002));
@@ -364,7 +372,6 @@ app.post("/api/trade/place", authMiddleware, (req, res) => {
       u.tradeCount++;
     }
   }, Math.min(expirySec * 1000, 15000));
-
   res.json({ trade, newBalance: user.balance });
 });
 
@@ -375,7 +382,7 @@ app.get("/api/trade/:id/result", authMiddleware, (req, res) => {
   res.json({ trade: t, balance: u?.balance });
 });
 
-// ── MPESA STK PUSH ────────────────────────────────────────────
+// ── DEPOSIT ───────────────────────────────────────────────────
 app.post("/api/payments/deposit", authMiddleware, async (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !amount)
@@ -386,11 +393,11 @@ app.post("/api/payments/deposit", authMiddleware, async (req, res) => {
     return res.status(400).json({ error: `Minimum deposit is KES ${DB.settings.minDeposit}` });
 
   const fmtPhone = formatPhone(phone);
-  console.log(`[DEPOSIT] raw=${phone} formatted=${fmtPhone} amount=${amt}`);
+  console.log(`[DEPOSIT] phone=${phone} → ${fmtPhone} amount=${amt}`);
 
   if (!/^2547\d{8}$|^2541\d{8}$/.test(fmtPhone)) {
     return res.status(400).json({
-      error: `Invalid phone number "${fmtPhone}". Please use your Safaricom number in format 07XXXXXXXX`,
+      error: `Invalid phone number. Got "${fmtPhone}". Use Safaricom format 07XXXXXXXX`,
     });
   }
 
@@ -402,107 +409,96 @@ app.post("/api/payments/deposit", authMiddleware, async (req, res) => {
   };
   DB.transactions.push(txn);
 
-  // ── DEMO MODE ─────────────────────────────────────────────
+  // DEMO MODE
   if (IS_DEMO) {
     txn.status = "demo";
-    console.log("[DEPOSIT] Running in DEMO mode — will auto-credit on poll");
     return res.json({
-      transactionId: txn.id,
-      mode:    "demo",
-      message: "Demo mode active. Your deposit will be credited automatically.",
+      transactionId: txn.id, mode: "demo",
+      message: "Demo mode — deposit will be credited automatically.",
     });
   }
 
-  // ── LIVE DARAJA ───────────────────────────────────────────
+  // REAL DARAJA
   try {
-    console.log("[DEPOSIT] Getting Daraja access token...");
     const token = await getAccessToken();
-
-    console.log("[DEPOSIT] Initiating STK push...");
-    const data = await initiateStkPush(token, fmtPhone, amt);
+    const data  = await stkPush(token, fmtPhone, amt);
 
     if (data.ResponseCode === "0") {
       txn.mpesaCheckoutId = data.CheckoutRequestID;
-      txn.notes = data.CustomerMessage || "STK push sent successfully";
-      console.log(`[DEPOSIT] STK pushed. CheckoutRequestID: ${data.CheckoutRequestID}`);
+      txn.notes = data.CustomerMessage || "STK push sent";
       return res.json({
         transactionId:     txn.id,
         checkoutRequestId: data.CheckoutRequestID,
-        message:           data.CustomerMessage || "Please check your phone and enter your M-Pesa PIN",
+        message:           data.CustomerMessage || "Check your phone and enter your M-Pesa PIN",
       });
     }
 
-    // Daraja error in response body
     txn.status = "failed";
-    const errDetail = data.errorMessage || data.ResponseDescription || data.ResultDesc || JSON.stringify(data);
-    txn.notes  = errDetail;
-    console.error(`[DEPOSIT] Daraja rejected STK: ${errDetail}`);
+    const detail = data.errorMessage || data.ResponseDescription || data.ResultDesc || JSON.stringify(data);
+    txn.notes = detail;
     return res.status(502).json({
-      error:  "M-Pesa payment failed",
-      detail: errDetail,
-      code:   data.errorCode || data.ResponseCode || "",
+      error: "M-Pesa payment failed", detail,
+      code: data.errorCode || data.ResponseCode || "",
     });
 
   } catch (e) {
     txn.status = "failed";
     txn.notes  = e.message;
     console.error(`[DEPOSIT] Exception: ${e.message}`);
+
+    // Parse axios error for a clean message
+    const axiosDetail = e.response
+      ? `Daraja HTTP ${e.response.status}: ${JSON.stringify(e.response.data)}`
+      : e.message;
+
     return res.status(502).json({
       error:  "Payment initiation failed",
-      detail: e.message,
+      detail: axiosDetail,
     });
   }
 });
 
-// ── POLL DEPOSIT STATUS ───────────────────────────────────────
+// ── POLL STATUS ───────────────────────────────────────────────
 app.get("/api/payments/deposit/:txnId/status", authMiddleware, async (req, res) => {
   const txn = DB.transactions.find(t => t.id === req.params.txnId && t.userId === req.user.id);
-  if (!txn) return res.status(404).json({ error: "Transaction not found" });
+  if (!txn) return res.status(404).json({ error: "Not found" });
 
-  // demo: auto-credit on first poll
   if (txn.status === "demo") {
     if (!txn._credited) {
-      txn._credited   = true;
-      txn.status      = "success";
+      txn._credited = true; txn.status = "success";
       txn.completedAt = new Date().toISOString();
       const u = DB.users.find(x => x.id === req.user.id);
       if (u) { u.balance += txn.amount; u.totalDeposited += txn.amount; }
-      console.log(`[DEMO] Credited KES ${txn.amount} to ${req.user.username}`);
     }
     const u = DB.users.find(x => x.id === req.user.id);
     return res.json({ status: txn.status, balance: u?.balance });
   }
 
-  // already resolved
-  if (["success", "failed", "cancelled"].includes(txn.status)) {
+  if (["success","failed","cancelled"].includes(txn.status)) {
     const u = DB.users.find(x => x.id === req.user.id);
     return res.json({ status: txn.status, balance: u?.balance, mpesaRef: txn.mpesaRef });
   }
-
-  if (!txn.mpesaCheckoutId)
-    return res.json({ status: "pending" });
+  if (!txn.mpesaCheckoutId) return res.json({ status: "pending" });
 
   try {
     const token = await getAccessToken();
-    const data  = await queryStkStatus(token, txn.mpesaCheckoutId);
+    const data  = await stkQuery(token, txn.mpesaCheckoutId);
     const rc    = String(data?.ResultCode ?? "");
 
     if (rc === "0") {
       if (!txn._credited) {
-        txn._credited   = true;
-        txn.status      = "success";
+        txn._credited = true; txn.status = "success";
         txn.completedAt = new Date().toISOString();
         const meta = data?.CallbackMetadata?.Item || [];
         txn.mpesaRef = meta.find(i => i.Name === "MpesaReceiptNumber")?.Value || "";
         txn.notes    = `M-Pesa ref: ${txn.mpesaRef}`;
         const u = DB.users.find(x => x.id === req.user.id);
         if (u) { u.balance += txn.amount; u.totalDeposited += txn.amount; }
-        console.log(`[POLL] Payment confirmed. Credited KES ${txn.amount} ref=${txn.mpesaRef}`);
       }
     } else if (rc === "1032") {
       txn.status = "cancelled"; txn.notes = "Cancelled by user";
     } else if (rc === "1037") {
-      txn.status = "failed"; txn.notes = "STK push timed out";
+      txn.status = "failed"; txn.notes = "Timed out";
     } else if (
       data?.errorCode === "500.001.1001" ||
       (data?.errorMessage || "").toLowerCase().includes("in process") ||
@@ -517,50 +513,36 @@ app.get("/api/payments/deposit/:txnId/status", authMiddleware, async (req, res) 
     }
 
     const u = DB.users.find(x => x.id === req.user.id);
-    return res.json({
-      status: txn.status, balance: u?.balance,
-      mpesaRef: txn.mpesaRef, message: txn.notes,
-    });
-
+    return res.json({ status: txn.status, balance: u?.balance, mpesaRef: txn.mpesaRef, message: txn.notes });
   } catch (e) {
-    console.error(`[POLL] Exception: ${e.message}`);
+    console.error(`[POLL] ${e.message}`);
     return res.json({ status: "pending" });
   }
 });
 
-// ── DARAJA CALLBACK WEBHOOK ───────────────────────────────────
+// ── CALLBACK ──────────────────────────────────────────────────
 app.post("/api/payments/mpesa/callback", (req, res) => {
   try {
-    console.log("[CALLBACK] Received:", JSON.stringify(req.body));
+    console.log("[CALLBACK]", JSON.stringify(req.body));
     const cb = req.body?.Body?.stkCallback;
     if (!cb) return res.json({ ResultCode: 0, ResultDesc: "OK" });
-
     const txn = DB.transactions.find(t => t.mpesaCheckoutId === cb.CheckoutRequestID);
-    if (!txn) {
-      console.log(`[CALLBACK] No transaction found for ${cb.CheckoutRequestID}`);
-      return res.json({ ResultCode: 0, ResultDesc: "OK" });
-    }
-
+    if (!txn) return res.json({ ResultCode: 0, ResultDesc: "OK" });
     if (cb.ResultCode === 0 && !txn._credited) {
-      const meta   = cb.CallbackMetadata?.Item || [];
-      const mpRef  = meta.find(i => i.Name === "MpesaReceiptNumber")?.Value || "";
-      const paid   = meta.find(i => i.Name === "Amount")?.Value || txn.amount;
-      txn._credited   = true;
-      txn.status      = "success";
+      const meta  = cb.CallbackMetadata?.Item || [];
+      const mpRef = meta.find(i => i.Name === "MpesaReceiptNumber")?.Value || "";
+      const paid  = meta.find(i => i.Name === "Amount")?.Value || txn.amount;
+      txn._credited = true; txn.status = "success";
       txn.completedAt = new Date().toISOString();
-      txn.mpesaRef    = mpRef;
-      txn.notes       = `M-Pesa ref: ${mpRef}`;
+      txn.mpesaRef = mpRef; txn.notes = `M-Pesa ref: ${mpRef}`;
       const u = DB.users.find(x => x.id === txn.userId);
       if (u) { u.balance += Number(paid); u.totalDeposited += Number(paid); }
-      console.log(`[CALLBACK] Credited KES ${paid} to user ${txn.userId} ref=${mpRef}`);
+      console.log(`[CALLBACK] Credited KES ${paid} user=${txn.userId} ref=${mpRef}`);
     } else if (cb.ResultCode !== 0) {
       txn.status = cb.ResultCode === 1032 ? "cancelled" : "failed";
-      txn.notes  = cb.ResultDesc || "Payment failed";
-      console.log(`[CALLBACK] Failed ResultCode=${cb.ResultCode} Desc=${cb.ResultDesc}`);
+      txn.notes  = cb.ResultDesc || "Failed";
     }
-  } catch (e) {
-    console.error("[CALLBACK] Error:", e.message);
-  }
+  } catch (e) { console.error("[CALLBACK]", e.message); }
   res.json({ ResultCode: 0, ResultDesc: "Accepted" });
 });
 
@@ -574,11 +556,9 @@ app.post("/api/payments/withdraw", authMiddleware, async (req, res) => {
   const user = DB.users.find(u => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "Not found" });
   if (user.balance < amt) return res.status(400).json({ error: "Insufficient balance" });
-
   const fee = Math.round(amt * (DB.settings.withdrawalFeePercent / 100) + DB.settings.withdrawalFeeFlat);
   const net = amt - fee;
   user.balance -= amt; user.totalWithdrawn += amt;
-
   const txn = {
     id: uuidv4(), userId: user.id, type: "withdrawal",
     amount: amt, fee, net, phone: formatPhone(phone),
@@ -586,29 +566,30 @@ app.post("/api/payments/withdraw", authMiddleware, async (req, res) => {
     completedAt: null, notes: "Awaiting admin approval",
   };
   DB.transactions.push(txn);
-  res.json({ transactionId: txn.id, fee, net, newBalance: user.balance, message: "Withdrawal submitted. Processing within 24 hours." });
+  res.json({ transactionId: txn.id, fee, net, newBalance: user.balance,
+    message: "Withdrawal submitted. Processing within 24 hours." });
 });
 
 // ── MARKET ────────────────────────────────────────────────────
 const ASSETS = [
-  { id:"usdkes",name:"USD/KES",sub:"Nairobi FX",   icon:"💵",cat:"forex", price:132.45,chg: 0.23,vol:"2.4M" },
-  { id:"eurkes",name:"EUR/KES",sub:"Nairobi FX",   icon:"💶",cat:"forex", price:143.80,chg:-0.41,vol:"1.8M" },
-  { id:"gbpkes",name:"GBP/KES",sub:"Nairobi FX",   icon:"🏴",cat:"forex", price:167.20,chg: 0.18,vol:"890K" },
-  { id:"usdjpy",name:"USD/JPY",sub:"Global FX",    icon:"¥", cat:"forex", price:149.85,chg:-0.32,vol:"5.1B" },
-  { id:"btcusd",name:"BTC/USD",sub:"Crypto",        icon:"₿", cat:"crypto",price:68420, chg: 2.15,vol:"12.1B" },
-  { id:"ethusd",name:"ETH/USD",sub:"Crypto",        icon:"◆", cat:"crypto",price:3245.6,chg: 1.08,vol:"4.2B" },
-  { id:"solusd",name:"SOL/USD",sub:"Crypto",        icon:"◉", cat:"crypto",price:178.40,chg:-0.73,vol:"1.1B" },
-  { id:"safcom",name:"SCOM",   sub:"NSE·Safaricom", icon:"📡",cat:"nse",  price:17.40, chg:-0.57,vol:"14.2M" },
-  { id:"eqbnk", name:"EQTY",   sub:"NSE·Equity",   icon:"🏦",cat:"nse",  price:52.75, chg: 1.32,vol:"5.8M" },
-  { id:"kenol", name:"KENO",   sub:"NSE·Kobil",     icon:"⛽",cat:"nse",  price:14.20, chg:-0.28,vol:"2.1M" },
-  { id:"eabl",  name:"EABL",   sub:"NSE·EA Brew",   icon:"🍺",cat:"nse",  price:145.50,chg: 0.69,vol:"3.4M" },
-  { id:"gold",  name:"XAU/USD",sub:"Commodities",   icon:"🥇",cat:"comm", price:2348.5,chg: 0.65,vol:"52.4B" },
-  { id:"oil",   name:"WTI Oil",sub:"Commodities",   icon:"🛢", cat:"comm", price:78.32, chg:-0.44,vol:"18.6B" },
+  {id:"usdkes",name:"USD/KES",sub:"Nairobi FX",   icon:"💵",cat:"forex", price:132.45,chg: 0.23,vol:"2.4M"},
+  {id:"eurkes",name:"EUR/KES",sub:"Nairobi FX",   icon:"💶",cat:"forex", price:143.80,chg:-0.41,vol:"1.8M"},
+  {id:"gbpkes",name:"GBP/KES",sub:"Nairobi FX",   icon:"🏴",cat:"forex", price:167.20,chg: 0.18,vol:"890K"},
+  {id:"usdjpy",name:"USD/JPY",sub:"Global FX",    icon:"¥", cat:"forex", price:149.85,chg:-0.32,vol:"5.1B"},
+  {id:"btcusd",name:"BTC/USD",sub:"Crypto",        icon:"₿", cat:"crypto",price:68420, chg: 2.15,vol:"12.1B"},
+  {id:"ethusd",name:"ETH/USD",sub:"Crypto",        icon:"◆", cat:"crypto",price:3245.6,chg: 1.08,vol:"4.2B"},
+  {id:"solusd",name:"SOL/USD",sub:"Crypto",        icon:"◉", cat:"crypto",price:178.40,chg:-0.73,vol:"1.1B"},
+  {id:"safcom",name:"SCOM",   sub:"NSE·Safaricom", icon:"📡",cat:"nse",  price:17.40, chg:-0.57,vol:"14.2M"},
+  {id:"eqbnk", name:"EQTY",   sub:"NSE·Equity",   icon:"🏦",cat:"nse",  price:52.75, chg: 1.32,vol:"5.8M"},
+  {id:"kenol", name:"KENO",   sub:"NSE·Kobil",     icon:"⛽",cat:"nse",  price:14.20, chg:-0.28,vol:"2.1M"},
+  {id:"eabl",  name:"EABL",   sub:"NSE·EA Brew",   icon:"🍺",cat:"nse",  price:145.50,chg: 0.69,vol:"3.4M"},
+  {id:"gold",  name:"XAU/USD",sub:"Commodities",   icon:"🥇",cat:"comm", price:2348.5,chg: 0.65,vol:"52.4B"},
+  {id:"oil",   name:"WTI Oil",sub:"Commodities",   icon:"🛢", cat:"comm", price:78.32, chg:-0.44,vol:"18.6B"},
 ];
 setInterval(() => {
   ASSETS.forEach(a => {
-    a.price = Math.max(0.01, a.price + (Math.random() - 0.495) * a.price * 0.0012);
-    a.chg   = Math.max(-9.99, Math.min(9.99, a.chg + (Math.random() - 0.5) * 0.04));
+    a.price = Math.max(0.01, a.price + (Math.random()-0.495)*a.price*0.0012);
+    a.chg   = Math.max(-9.99, Math.min(9.99, a.chg + (Math.random()-0.5)*0.04));
   });
 }, 2000);
 app.get("/api/market/assets", (_, res) => res.json(ASSETS));
@@ -623,110 +604,104 @@ app.get("/api/market/signals", (_, res) => res.json(ASSETS.map(a => ({
 // ── ADMIN ─────────────────────────────────────────────────────
 app.get("/api/admin/stats", authMiddleware, adminOnly, (req, res) => {
   const users = DB.users.filter(u => u.role !== "admin");
-  const deps  = DB.transactions.filter(t => t.type === "deposit" && t.status === "success");
-  const wds   = DB.transactions.filter(t => t.type === "withdrawal");
-  const pw    = wds.filter(t => t.status === "pending");
+  const deps  = DB.transactions.filter(t => t.type==="deposit" && t.status==="success");
+  const wds   = DB.transactions.filter(t => t.type==="withdrawal");
+  const pw    = wds.filter(t => t.status==="pending");
   const tt    = DB.trades.length;
-  const wt    = DB.trades.filter(t => t.result === "WIN").length;
-  const hp    = DB.trades.filter(t => t.result !== "PENDING")
-    .reduce((s, t) => s + (t.result === "LOSS" ? t.stake : -t.payout), 0);
+  const wt    = DB.trades.filter(t => t.result==="WIN").length;
+  const hp    = DB.trades.filter(t => t.result!=="PENDING")
+    .reduce((s,t) => s + (t.result==="LOSS" ? t.stake : -t.payout), 0);
   res.json({
     totalUsers: users.length,
-    activeUsers: users.filter(u => u.status === "active").length,
-    suspendedUsers: users.filter(u => u.status === "suspended").length,
-    totalBalance: users.reduce((s, u) => s + u.balance, 0),
-    totalDeposits: deps.reduce((s, t) => s + t.amount, 0),
-    totalWithdrawals: wds.reduce((s, t) => s + (t.amount || 0), 0),
+    activeUsers: users.filter(u => u.status==="active").length,
+    suspendedUsers: users.filter(u => u.status==="suspended").length,
+    totalBalance: users.reduce((s,u) => s+u.balance, 0),
+    totalDeposits: deps.reduce((s,t) => s+t.amount, 0),
+    totalWithdrawals: wds.reduce((s,t) => s+(t.amount||0), 0),
     pendingWithdrawalsCount: pw.length,
-    pendingWithdrawalsAmount: pw.reduce((s, t) => s + t.amount, 0),
-    totalTrades: tt, winTrades: wt, lossTrades: tt - wt,
+    pendingWithdrawalsAmount: pw.reduce((s,t) => s+t.amount, 0),
+    totalTrades: tt, winTrades: wt, lossTrades: tt-wt,
     houseProfit: Math.round(hp),
-    platformWinRate: tt > 0 ? Math.round(wt / tt * 100) : 0,
+    platformWinRate: tt>0 ? Math.round(wt/tt*100) : 0,
   });
 });
 app.get("/api/admin/users", authMiddleware, adminOnly, (req, res) =>
-  res.json(DB.users.filter(u => u.role !== "admin").map(safeUser)));
+  res.json(DB.users.filter(u => u.role!=="admin").map(safeUser)));
 app.get("/api/admin/users/:id", authMiddleware, adminOnly, (req, res) => {
-  const user = DB.users.find(u => u.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "Not found" });
+  const user = DB.users.find(u => u.id===req.params.id);
+  if (!user) return res.status(404).json({error:"Not found"});
   res.json({
     user: safeUser(user),
-    trades: DB.trades.filter(t => t.userId === user.id)
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
-    transactions: DB.transactions.filter(t => t.userId === user.id)
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+    trades: DB.trades.filter(t=>t.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)),
+    transactions: DB.transactions.filter(t=>t.userId===user.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)),
   });
 });
 app.patch("/api/admin/users/:id", authMiddleware, adminOnly, (req, res) => {
-  const user = DB.users.find(u => u.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "Not found" });
-  ["balance", "status", "kycVerified", "phone"].forEach(k => {
-    if (req.body[k] !== undefined) user[k] = k === "balance" ? parseFloat(req.body[k]) : req.body[k];
+  const user = DB.users.find(u => u.id===req.params.id);
+  if (!user) return res.status(404).json({error:"Not found"});
+  ["balance","status","kycVerified","phone"].forEach(k => {
+    if (req.body[k] !== undefined) user[k] = k==="balance" ? parseFloat(req.body[k]) : req.body[k];
   });
   res.json(safeUser(user));
 });
 app.post("/api/admin/users/:id/adjust-balance", authMiddleware, adminOnly, (req, res) => {
-  const user = DB.users.find(u => u.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "Not found" });
-  const { amount, type, reason } = req.body;
+  const user = DB.users.find(u => u.id===req.params.id);
+  if (!user) return res.status(404).json({error:"Not found"});
+  const {amount, type, reason} = req.body;
   const adj = parseFloat(amount);
-  if (isNaN(adj) || adj <= 0) return res.status(400).json({ error: "Invalid amount" });
-  if (type === "debit" && user.balance < adj) return res.status(400).json({ error: "Balance too low" });
-  type === "credit" ? (user.balance += adj) : (user.balance -= adj);
+  if (isNaN(adj)||adj<=0) return res.status(400).json({error:"Invalid amount"});
+  if (type==="debit"&&user.balance<adj) return res.status(400).json({error:"Balance too low"});
+  type==="credit" ? (user.balance+=adj) : (user.balance-=adj);
   DB.transactions.push({
-    id: uuidv4(), userId: user.id, type: `admin_${type}`, amount: adj,
-    status: "success", notes: reason || "Admin adjustment",
-    createdAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+    id:uuidv4(), userId:user.id, type:`admin_${type}`, amount:adj,
+    status:"success", notes:reason||"Admin adjustment",
+    createdAt:new Date().toISOString(), completedAt:new Date().toISOString(),
   });
-  res.json({ newBalance: user.balance });
+  res.json({newBalance: user.balance});
 });
 app.delete("/api/admin/users/:id", authMiddleware, adminOnly, (req, res) => {
-  const i = DB.users.findIndex(u => u.id === req.params.id && u.role !== "admin");
-  if (i === -1) return res.status(404).json({ error: "Not found" });
+  const i = DB.users.findIndex(u => u.id===req.params.id && u.role!=="admin");
+  if (i===-1) return res.status(404).json({error:"Not found"});
   DB.users.splice(i, 1);
-  res.json({ success: true });
+  res.json({success:true});
 });
 app.post("/api/admin/users/:id/reset-password", authMiddleware, adminOnly, async (req, res) => {
-  const user = DB.users.find(u => u.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "Not found" });
-  const { newPassword } = req.body;
-  if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "Too short" });
+  const user = DB.users.find(u => u.id===req.params.id);
+  if (!user) return res.status(404).json({error:"Not found"});
+  const {newPassword} = req.body;
+  if (!newPassword||newPassword.length<6) return res.status(400).json({error:"Too short"});
   user.password = await bcrypt.hash(newPassword, 10);
-  res.json({ success: true });
+  res.json({success:true});
 });
 app.get("/api/admin/transactions", authMiddleware, adminOnly, (req, res) =>
-  res.json([...DB.transactions].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))));
+  res.json([...DB.transactions].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))));
 app.patch("/api/admin/transactions/:id", authMiddleware, adminOnly, (req, res) => {
-  const txn = DB.transactions.find(t => t.id === req.params.id);
-  if (!txn) return res.status(404).json({ error: "Not found" });
-  const { status, notes } = req.body;
+  const txn = DB.transactions.find(t => t.id===req.params.id);
+  if (!txn) return res.status(404).json({error:"Not found"});
+  const {status, notes} = req.body;
   txn.status = status;
   if (notes) txn.notes = notes;
-  if (["success", "rejected"].includes(status)) txn.completedAt = new Date().toISOString();
-  if (status === "rejected" && txn.type === "withdrawal") {
-    const u = DB.users.find(x => x.id === txn.userId);
+  if (["success","rejected"].includes(status)) txn.completedAt = new Date().toISOString();
+  if (status==="rejected" && txn.type==="withdrawal") {
+    const u = DB.users.find(x => x.id===txn.userId);
     if (u) u.balance += txn.amount;
   }
   res.json(txn);
 });
 app.get("/api/admin/trades", authMiddleware, adminOnly, (req, res) =>
-  res.json([...DB.trades].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 200)));
+  res.json([...DB.trades].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,200)));
 app.get("/api/admin/settings", authMiddleware, adminOnly, (req, res) => res.json(DB.settings));
 app.patch("/api/admin/settings", authMiddleware, adminOnly, (req, res) => {
   Object.assign(DB.settings, req.body);
   res.json(DB.settings);
 });
 app.get("/api/settings/public", (req, res) => {
-  const {
-    maintenanceMode, tradingEnabled, minStake, maxStake, payoutRates,
-    minDeposit, minWithdrawal, withdrawalFeePercent, withdrawalFeeFlat,
-    platformName, announcement,
-  } = DB.settings;
-  res.json({
-    maintenanceMode, tradingEnabled, minStake, maxStake, payoutRates,
-    minDeposit, minWithdrawal, withdrawalFeePercent, withdrawalFeeFlat,
-    platformName, announcement,
-  });
+  const {maintenanceMode,tradingEnabled,minStake,maxStake,payoutRates,
+    minDeposit,minWithdrawal,withdrawalFeePercent,withdrawalFeeFlat,
+    platformName,announcement} = DB.settings;
+  res.json({maintenanceMode,tradingEnabled,minStake,maxStake,payoutRates,
+    minDeposit,minWithdrawal,withdrawalFeePercent,withdrawalFeeFlat,
+    platformName,announcement});
 });
 
 // ── Serve React ───────────────────────────────────────────────
@@ -736,5 +711,5 @@ app.get("*", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`[SERVER] TradeFlow Pro running on port ${PORT}`);
+  console.log(`[SERVER] TradeFlow Pro on port ${PORT} | env=${MPESA_ENV} | demo=${IS_DEMO}`);
 });
