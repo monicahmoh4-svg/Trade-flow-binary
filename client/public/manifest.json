@@ -1,0 +1,31 @@
+{
+  "short_name": "TradeFlow Pro",
+  "name": "TradeFlow Pro - Binary Options Trading",
+  "description": "Professional binary options trading platform with M-Pesa payments",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/trade",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0a0e1a",
+  "background_color": "#0a0e1a",
+  "categories": ["finance", "business"],
+  "prefer_related_applications": false
+}
