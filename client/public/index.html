@@ -2,24 +2,70 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#0b0f1a" />
-  <meta name="description" content="TradeFlow Pro - Smart Binary Options Trading" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="description" content="TradeFlow Pro — Professional binary options trading with M-Pesa. Trade forex, crypto and NSE stocks." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TradeFlow Pro" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta property="og:title" content="TradeFlow Pro" />
+  <meta property="og:description" content="Professional binary options trading platform for Kenya" />
+  <meta property="og:type" content="website" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
   <title>TradeFlow Pro</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    html, body, #root { margin: 0; padding: 0; height: 100%; }
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0b0f1a; color: #e8edf8; -webkit-font-smoothing: antialiased; }
-    ::-webkit-scrollbar { width: 4px; height: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2a3450; border-radius: 4px; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; overflow: hidden; }
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: #0a0e1a; color: #e2e8f8;
+      -webkit-font-smoothing: antialiased;
+    }
+    #splash {
+      position: fixed; inset: 0; background: #0a0e1a;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 9999; transition: opacity .6s ease;
+    }
+    #splash.out { opacity: 0; pointer-events: none; }
+    .sp-logo { font-size: 36px; font-weight: 900; letter-spacing: -1px; margin-bottom: 6px; }
+    .sp-logo .g { color: #00d870; }
+    .sp-logo .b { color: #3b9eff; font-size: 26px; }
+    .sp-sub { font-size: 13px; color: #6b7a99; margin-bottom: 36px; letter-spacing: .5px; }
+    .sp-bar { width: 200px; height: 3px; background: #1a2235; border-radius: 3px; overflow: hidden; }
+    .sp-fill { height: 100%; background: linear-gradient(90deg,#00d870,#3b9eff); animation: ldfill 2s ease forwards; }
+    .sp-ver { position: absolute; bottom: 24px; font-size: 10px; color: #2a3a55; font-family: monospace; }
+    @keyframes ldfill { 0%{width:0} 100%{width:100%} }
   </style>
 </head>
 <body>
-  <noscript>You need to enable JavaScript to run TradeFlow Pro.</noscript>
+  <div id="splash">
+    <div class="sp-logo">Trade<span class="g">Flow</span><span class="b"> Pro</span></div>
+    <div class="sp-sub">Professional Binary Options Trading</div>
+    <div class="sp-bar"><div class="sp-fill"></div></div>
+    <div class="sp-ver">v2.0 · Blockchain Secured · M-Pesa Powered</div>
+  </div>
   <div id="root"></div>
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const s = document.getElementById('splash');
+        if (s) { s.classList.add('out'); setTimeout(() => s.remove(), 600); }
+      }, 2000);
+    });
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(r => console.log('[SW] Registered:', r.scope))
+          .catch(e => console.warn('[SW] Failed:', e));
+      });
+    }
+  </script>
+  <noscript>JavaScript is required to run TradeFlow Pro.</noscript>
 </body>
 </html>
